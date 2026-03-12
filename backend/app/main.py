@@ -9,8 +9,14 @@ from .config import settings
 from .database import engine, Base
 from .routers import auth_router, chat_router, message_router, upload_router, feedback_router
 
-# Create all tables (if not using schema.sql manually)
-Base.metadata.create_all(bind=engine)
+# Run DB creation safely after app starts
+@app.on_event("startup")
+def startup():
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database connected")
+    except Exception as e:
+        print("❌ Database error:", e)
 
 app = FastAPI(
     title="LexRam.AI",
