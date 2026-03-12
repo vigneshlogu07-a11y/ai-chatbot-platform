@@ -5,18 +5,28 @@ LexRam.AI — FastAPI Application Entry Point
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import time
 from .config import settings
 from .database import engine, Base
 from .routers import auth_router, chat_router, message_router, upload_router, feedback_router
 
-# Run DB creation safely after app starts
+# Run DB creation safely after app starts with retries
 @app.on_event("startup")
 def startup():
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("✅ Database connected")
-    except Exception as e:
-        print("❌ Database error:", e)
+    max_retries = 5
+    retry_delay = 5
+    for i in range(max_retries):
+        try:
+            Base.metadata.create_all(bind=engine)
+            print("✅ Database connected")
+            return
+        except Exception as e:
+            print(f"⚠️ Database connection attempt {i+1} failed: {e}")
+            if i < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                print("❌ Max retries reached. Database might not be available.")
 
 app = FastAPI(
     title="LexRam.AI",
