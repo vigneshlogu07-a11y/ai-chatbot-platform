@@ -18,8 +18,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = ""
 
     def get_database_url(self) -> str:
-        if self.DATABASE_URL:
-            return self.DATABASE_URL
+        url = self.DATABASE_URL
+        if url:
+            if url.startswith("mysql://"):
+                url = url.replace("mysql://", "mysql+pymysql://", 1)
+            return url
         return f"mysql+pymysql://{self.MYSQLUSER}:{self.MYSQLPASSWORD}@{self.MYSQLHOST}:{self.MYSQLPORT}/{self.MYSQLDATABASE}"
 
     # JWT
