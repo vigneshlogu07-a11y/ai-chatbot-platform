@@ -1,1 +1,14 @@
-# Monorepo Root
+fastapi
+uvicorn[standard]
+sqlalchemy
+pymysql
+cryptography
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+python-multipart
+python-dotenv
+pydantic[email]
+pydantic-settings
+google-generativeai
+gunicorn
