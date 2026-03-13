@@ -16,6 +16,17 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# CORS Middleware — allow your Netlify frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://aichatbotgem.netlify.app",  # <-- frontend URL
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Run DB creation safely after app starts with retries
 @app.on_event("startup")
 def startup():
@@ -33,15 +44,8 @@ def startup():
                 time.sleep(retry_delay)
             else:
                 print("❌ Max retries reached. Database might not be available.")
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.get_allowed_origins(),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+                # Do not crash the app — just warn
+                return
 
 # Routers
 app.include_router(auth_router.router)
