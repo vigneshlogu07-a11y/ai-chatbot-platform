@@ -10,5 +10,5 @@ python-multipart
 python-dotenv
 pydantic[email]
 pydantic-settings
-google-generativeai
+google-genai
 gunicorn
