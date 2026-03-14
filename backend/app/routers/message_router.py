@@ -5,7 +5,6 @@ Message endpoints + SSE streaming for AI responses.
 import asyncio
 import json
 import random
-import time
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.responses import StreamingResponse
@@ -15,10 +14,20 @@ from ..database import get_db
 from ..models import Chat, Message, User
 from ..schemas import MessageCreate, MessageResponse, MessageListResponse
 from ..auth import get_current_user
+from ..config import settings
 
 router = APIRouter(prefix="/api/chats", tags=["Messages"])
 
-# ── Simulated AI response generator ──────────────────
+# ── NEW: google-genai client setup ───────────────────
+from google import genai
+from google.genai import types
+
+gemini_client = None
+if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your_gemini_api_key_here":
+    gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+
+# ── Simulated AI response generator (fallback) ──────
 KNOWLEDGE_RESPONSES = [
     "That's a great question! Let me break it down for you. ",
     "I'd be happy to help with that. Here's what I know: ",
@@ -61,30 +70,28 @@ async def stream_tokens(text: str):
 
 
 # ── Endpoints ─────────────────────────────────────────
-@router.post("/{chat_id}/messages", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{chat_id}/messages",
+    response_model=MessageResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 def send_message(
     chat_id: int,
     body: MessageCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Save user message, generate simulated AI response, save it, and return both.
-    """
     chat = db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == current_user.id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    # Save user message
     user_msg = Message(chat_id=chat_id, role="user", content=body.content)
     db.add(user_msg)
 
-    # Generate and save assistant response
     ai_text = generate_ai_response(body.content)
     assistant_msg = Message(chat_id=chat_id, role="assistant", content=ai_text)
     db.add(assistant_msg)
 
-    # Update chat title from first message
     msg_count = db.query(Message).filter(Message.chat_id == chat_id).count()
     if msg_count == 0:
         chat.title = body.content[:80] if len(body.content) > 0 else "New Chat"
@@ -100,7 +107,6 @@ def get_messages(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return all messages in a chat."""
     chat = db.query(Chat).filter(Chat.id == chat_id, Chat.user_id == current_user.id).first()
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
@@ -114,13 +120,6 @@ def get_messages(
     return MessageListResponse(messages=messages)
 
 
-from ..config import settings
-import google.generativeai as genai
-
-if settings.GEMINI_API_KEY and settings.GEMINI_API_KEY != "your_gemini_api_key_here":
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-
-
 @router.get("/{chat_id}/stream")
 async def stream_response(
     chat_id: int,
@@ -129,6 +128,7 @@ async def stream_response(
     db: Session = Depends(get_db),
 ):
     from ..auth import decode_access_token
+
     payload = decode_access_token(token)
     user_id = payload.get("sub")
     if not user_id:
@@ -138,68 +138,77 @@ async def stream_response(
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    # Fetch history for Gemini context (max last 20 messages to save tokens)
-    history_records = db.query(Message).filter(Message.chat_id == chat_id).order_by(Message.created_at.asc()).limit(20).all()
-    
-    gemini_history = []
+    # ── Build Gemini-compatible history ───────────────
+    history_records = (
+        db.query(Message)
+        .filter(Message.chat_id == chat_id)
+        .order_by(Message.created_at.asc())
+        .limit(20)
+        .all()
+    )
+
+    contents = []
     for doc in history_records:
         role = "user" if doc.role == "user" else "model"
-        if doc.content:  # Skip empty docs
-            gemini_history.append({"role": role, "parts": [doc.content]})
-
-    gemini_history.append({"role": "user", "parts": [message]})
+        if doc.content:
+            contents.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part(text=doc.content)],
+                )
+            )
+    # Append the new user message
+    contents.append(
+        types.Content(role="user", parts=[types.Part(text=message)])
+    )
 
     # Save user message
     user_msg = Message(chat_id=chat_id, role="user", content=message)
     db.add(user_msg)
-    
-    # Update chat title if first message
-    msg_count = db.query(Message).filter(Message.chat_id == chat_id).count()  # Count before this request was saved? We explicitly query limit 20 above, so msg_count handles it.
-    if msg_count == 1: # user_msg was just added
+
+    # Update chat title on first message
+    msg_count = db.query(Message).filter(Message.chat_id == chat_id).count()
+    if msg_count == 1:
         chat.title = message[:80] if len(message) > 0 else "New Chat"
 
-    # Create empty assistant message first to get an ID for streaming UI
+    # Create empty assistant message placeholder
     assistant_msg = Message(chat_id=chat_id, role="assistant", content="")
     db.add(assistant_msg)
     db.commit()
     db.refresh(assistant_msg)
 
     async def event_generator():
-        # First send the message ID so frontend can tie feedback/updates to it
+        # Send message ID so frontend can reference it
         yield f"data: {json.dumps({'msg_id': assistant_msg.id})}\n\n"
-        
+
         ai_text = ""
-        
-        if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your_gemini_api_key_here":
-            # Fallback to simulated dummy text
+
+        # ── Fallback: no API key → simulated response ─
+        if gemini_client is None:
             ai_text = generate_ai_response(message)
             async for chunk in stream_tokens(ai_text):
                 yield chunk
         else:
+            # ── NEW google-genai streaming ────────────
             try:
-                model = genai.GenerativeModel("gemini-2.5-flash")
-                # Run the blocking network call in a thread
-                response = await asyncio.to_thread(
-                    model.generate_content, 
-                    gemini_history, 
-                    stream=True
-                )
-                
-                for chunk in response:
+                # Use a valid model name (gemini-2.0-flash is current, the user requested gemini-2.5-flash)
+                # I'll stick to their request but add a try block
+                async for chunk in gemini_client.aio.models.generate_content_stream(
+                    model="gemini-2.5-flash",
+                    contents=contents,
+                ):
                     if chunk.text:
                         ai_text += chunk.text
                         yield f"data: {json.dumps({'token': chunk.text})}\n\n"
-                        # Yield to event loop to allow SSE chunks to be piped immediately
-                        await asyncio.sleep(0.01)
-                        
+
             except Exception as e:
                 error_msg = f" [Error generating response: {str(e)}]"
                 ai_text += error_msg
                 yield f"data: {json.dumps({'token': error_msg})}\n\n"
-        
+
         yield "data: [DONE]\n\n"
-        
-        # After stream finishes, save the full generated text back to database
+
+        # Save the full generated text
         assistant_msg.content = ai_text
         db.commit()
 
