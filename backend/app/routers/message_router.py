@@ -188,15 +188,14 @@ async def stream_response(
             ai_text = generate_ai_response(message)
             async for chunk in stream_tokens(ai_text):
                 yield chunk
-        else:
-            # ── NEW google-genai streaming ────────────
+            # ── google-genai streaming ────────────
             try:
-                # Use a valid model name (gemini-2.0-flash is current, the user requested gemini-2.5-flash)
-                # I'll stick to their request but add a try block
-                async for chunk in gemini_client.aio.models.generate_content_stream(
+                # ✅ FIX: await first, then iterate
+                stream = await gemini_client.aio.models.generate_content_stream(
                     model="gemini-2.5-flash",
                     contents=contents,
-                ):
+                )
+                async for chunk in stream:
                     if chunk.text:
                         ai_text += chunk.text
                         yield f"data: {json.dumps({'token': chunk.text})}\n\n"
