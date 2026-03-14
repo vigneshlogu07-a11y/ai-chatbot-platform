@@ -47,7 +47,8 @@ export default function ChatWindow({ chatId, onChatUpdated }) {
     setStreaming(true);
     setStreamingText('');
 
-    const baseUrl = '/api';
+    // ✅ FIX: Use the same base URL as Axios client
+    const baseUrl = import.meta.env.VITE_API_URL || '/api';
     const params = new URLSearchParams({
       message: text,
       token: token,
@@ -56,6 +57,12 @@ export default function ChatWindow({ chatId, onChatUpdated }) {
 
     try {
       const response = await fetch(url);
+
+      // ✅ FIX: Check if response is OK
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullText = '';
@@ -105,8 +112,18 @@ export default function ChatWindow({ chatId, onChatUpdated }) {
       }
     } catch (err) {
       console.error('Streaming error:', err);
+      // ✅ FIX: Show error to user instead of silent fail
+      const errorMsg = {
+        id: Date.now() + 1,
+        role: 'assistant',
+        content: '❌ Failed to get response. Please try again.',
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setStreaming(false);
+      setStreamingText('');
+      setStreamingMsgId(null);
       inputRef.current?.focus();
     }
   };
