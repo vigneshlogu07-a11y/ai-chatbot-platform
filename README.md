@@ -30,10 +30,13 @@ Built with **React + Vite** (frontend) and **Python FastAPI** (backend) on **MyS
 ## 📷 Screenshots
 
 ### Login Page
-![Login Page](screenshot_login.png)
+![Login Page](screenshots/screenshot_login.png)
 
 ### Chat Interface
-![Chat Interface](screenshot_chat.png)
+![Chat Interface](screenshots/screenshot_chat.png)
+
+### Gemini AI Chat Experience
+![Gemini Chat](screenshots/screenshot_chat_gemini_1773274277865.png)
 
 ---
 
